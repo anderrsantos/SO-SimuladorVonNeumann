@@ -1,18 +1,19 @@
 #include "IOManager.hpp"
 #include <iostream>
-#include <chrono>
-#include <fstream>
 #include <cstdlib>
 #include <ctime>
+#include <algorithm>
 
-// Construtor
+// ---------------------------------------------------
+// CONSTRUTOR
+// ---------------------------------------------------
 IOManager::IOManager() :
     printer_requesting(false),
     disk_requesting(false),
     network_requesting(false),
     shutdown_flag(false)
 {
-    srand(time(nullptr));
+    srand(static_cast<unsigned int>(time(nullptr)));
 
     resultFile.open("result.dat", std::ios::app);
     outputFile.open("output.dat", std::ios::app);
@@ -24,109 +25,179 @@ IOManager::IOManager() :
     managerThread = std::thread(&IOManager::managerLoop, this);
 }
 
-// Destrutor
 IOManager::~IOManager() {
     shutdown_flag = true;
-    if (managerThread.joinable()) {
+    if (managerThread.joinable())
         managerThread.join();
-    }
     resultFile.close();
     outputFile.close();
 }
 
-// Adiciona um processo à lista de espera por I/O
+// ---------------------------------------------------
+// OPÇÃO A — integração real com Core
+// ---------------------------------------------------
+void IOManager::registerProcessWaitingForIO(
+    PCB* pcb,
+    std::vector<std::unique_ptr<IORequest>> requests,
+    int latency_ms
+) {
+    if (!pcb) return;
+
+    std::lock_guard<std::mutex> lock(queueLock);
+    Entry e;
+
+    e.pcb = pcb;
+    e.requests = std::move(requests);
+
+    // calcula custo total/maior
+    int max_ms = latency_ms;
+    for (auto &r : e.requests) {
+        if (r && r->cost_cycles.count() > max_ms)
+            max_ms = r->cost_cycles.count();
+    }
+
+    e.remaining_ms = max_ms;
+
+    pcb->state = State::Blocked;
+    queue.push_back(std::move(e));
+}
+
+// ---------------------------------------------------
+// Versão legada (mantida mas não usada)
+// ---------------------------------------------------
 void IOManager::registerProcessWaitingForIO(PCB* process) {
+    if (!process) return;
     std::lock_guard<std::mutex> lock(waiting_processes_lock);
     waiting_processes.push_back(process);
 }
 
-// Adiciona uma requisição criada à fila de processamento
+// ---------------------------------------------------
 void IOManager::addRequest(std::unique_ptr<IORequest> request) {
+    if (!request || !request->process) return;
+
     std::lock_guard<std::mutex> lock(queueLock);
-    requests.push_back(std::move(request));
+    Entry e;
+    e.pcb = request->process;
+    e.requests.push_back(std::move(request));
+    e.remaining_ms = static_cast<int>(e.requests.back()->cost_cycles.count());
+    e.pcb->state = State::Blocked;
+    queue.push_back(std::move(e));
 }
 
-void IOManager::managerLoop() {
-    while (!shutdown_flag) {
-        // ETAPA 1: Simula os dispositivos solicitando uma operação
-        {
-            std::lock_guard<std::mutex> lock(device_state_lock);
-            if (rand() % 100 == 0) {
-                if (!printer_requesting) {
-                    printer_requesting = true;
-                    // std::cout << "I/O Manager: [Impressora] está solicitando uma operação." << std::endl;
+// ---------------------------------------------------
+// step() — avança processamento
+// ---------------------------------------------------
+void IOManager::step() {
+    std::vector<Entry> finished;
+
+    {
+        std::lock_guard<std::mutex> lock(queueLock);
+
+        for (auto &e : queue) {
+            int step_ms = 50;
+            e.remaining_ms -= step_ms;
+            e.pcb->io_cycles.fetch_add(step_ms);
+
+            if (e.remaining_ms <= 0)
+                finished.push_back(std::move(e));
+        }
+
+        // remover finalizados
+        queue.erase(
+            std::remove_if(
+                queue.begin(), queue.end(),
+                [&](const Entry &entry){
+                    for (auto &done : finished)
+                        if (done.pcb == entry.pcb) return true;
+                    return false;
                 }
-            }
-            if (rand() % 50 == 0) {
-                if (!disk_requesting) {
-                    disk_requesting = true;
-                    // std::cout << "I/O Manager: [Disco] está solicitando uma operação." << std::endl;
-                }
+            ),
+            queue.end()
+        );
+    }
+
+    // processar finalizados
+    for (auto &e : finished) {
+
+        // imprime/armazenar requests
+        for (auto &r : e.requests) {
+            if (r && !r->msg.empty()) {
+                std::cout << "[IO] PID=" << e.pcb->pid << " => " << r->operation
+                          << " | MSG: " << r->msg << "\n";
+
+                if (resultFile)
+                    resultFile << e.pcb->pid << " | " << r->operation << " | " << r->msg << "\n";
+
+                if (outputFile)
+                    outputFile << e.pcb->pid << "," << r->operation << "," 
+                               << r->cost_cycles.count() << "\n";
             }
         }
 
-        // ETAPA 2: Verifica se há dispositivos solicitando E processos esperando
-        std::unique_ptr<IORequest> new_request = nullptr;
+        e.pcb->state = State::Ready;
+    }
+}
+
+// ---------------------------------------------------
+void IOManager::processEntry(Entry &e) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(e.remaining_ms));
+    for (auto &r : e.requests)
+        if (r && !r->msg.empty())
+            std::cout << "[IO] PID=" << e.pcb->pid << " => " << r->msg << "\n";
+    e.pcb->state = State::Ready;
+}
+
+// ---------------------------------------------------
+void IOManager::managerLoop() {
+    while (!shutdown_flag) {
+
+        // (LEGACY — processa processos sem requests específicas)
         {
-            std::lock_guard<std::mutex> wplock(waiting_processes_lock);
+            std::lock_guard<std::mutex> lock(device_state_lock);
+            if (rand() % 100 == 0) printer_requesting = true;
+            if (rand() % 50 == 0)  disk_requesting = true;
+        }
+
+        {
+            std::lock_guard<std::mutex> wlock(waiting_processes_lock);
             if (!waiting_processes.empty()) {
-                std::lock_guard<std::mutex> dslock(device_state_lock);
+
+                std::lock_guard<std::mutex> dlock(device_state_lock);
+
                 PCB* process_to_service = waiting_processes.front();
+                std::unique_ptr<IORequest> new_request = nullptr;
 
                 if (printer_requesting) {
                     new_request = std::make_unique<IORequest>();
                     new_request->operation = "print_job";
-                    new_request->msg = "Imprimindo documento...";
+                    new_request->msg = "Legacy printing...";
+                    new_request->process = process_to_service;
+                    new_request->cost_cycles = std::chrono::milliseconds(200);
                     printer_requesting = false;
-                } else if (disk_requesting) {
+                }
+                else if (disk_requesting) {
                     new_request = std::make_unique<IORequest>();
-                    new_request->operation = "read_from_disk";
-                    new_request->msg = "Lendo dados do disco...";
+                    new_request->operation = "disk_read";
+                    new_request->msg = "Legacy disk read...";
+                    new_request->process = process_to_service;
+                    new_request->cost_cycles = std::chrono::milliseconds(150);
                     disk_requesting = false;
                 }
-                
+
                 if (new_request) {
-                    new_request->process = process_to_service;
                     waiting_processes.erase(waiting_processes.begin());
-                    new_request->cost_cycles = std::chrono::milliseconds((rand() % 3 + 1) * 100);
+                    addRequest(std::move(new_request));
                 }
             }
         }
-        
-        if (new_request) {
-            addRequest(std::move(new_request));
-        }
 
-        // ETAPA 3: Processa a próxima requisição na fila
-        std::unique_ptr<IORequest> req_to_process = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(queueLock);
-            if (!requests.empty()) {
-                req_to_process = std::move(requests.front());
-                requests.erase(requests.begin());
-            }
-        }
-
-        if (req_to_process) {
-            auto start = std::chrono::steady_clock::now();
-            std::this_thread::sleep_for(req_to_process->cost_cycles);
-            auto end = std::chrono::steady_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-            // Incrementa ciclos de I/O no PCB
-            req_to_process->process->io_cycles.fetch_add(duration);
-
-            std::cout << "I/O Manager: Processo " << req_to_process->process->pid 
-                    << " executou '" << req_to_process->operation << "'\n";
-
-            resultFile << "Processo " << req_to_process->process->pid << " -> " 
-                    << req_to_process->operation << " : " << req_to_process->msg << "\n";
-            outputFile << req_to_process->process->pid << "," 
-                    << req_to_process->operation << "," << duration << "ms\n";
-
-            req_to_process->process->state = State::Ready;
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
+        step();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+}
+
+// ---------------------------------------------------
+size_t IOManager::pendingCount() const {
+    std::lock_guard<std::mutex> lock(queueLock);
+    return queue.size();
 }

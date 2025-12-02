@@ -1,20 +1,19 @@
-#ifndef IOMANAGER_HPP
-#define IOMANAGER_HPP
-
-#include "../cpu/PCB.hpp"
+#pragma once
 #include <vector>
+#include <string>
+#include <memory>
 #include <mutex>
 #include <thread>
-#include <memory>
-#include <fstream>
 #include <chrono>
+#include <fstream>
+#include "../cpu/PCB.hpp"
 
-// Definição completa da estrutura IORequest
+// Estrutura gerada pelo CONTROL_UNIT.cpp
 struct IORequest {
-    std::string operation;
-    std::string msg;
-    PCB* process = nullptr; // Ponteiro para o PCB associado
-    std::chrono::milliseconds cost_cycles;
+    std::string operation;       // "print", "read", "write", etc.
+    std::string msg;             // texto/valor do IO
+    PCB* process = nullptr;
+    std::chrono::milliseconds cost_cycles{100}; // tempo padrão de IO
 };
 
 class IOManager {
@@ -22,32 +21,49 @@ public:
     IOManager();
     ~IOManager();
 
-    // Método para um processo se registrar como "esperando por I/O"
+    // OPÇÃO A — integração completa com o Core:
+    // move os IORequests que vieram do pipeline do Core
+    void registerProcessWaitingForIO(
+        PCB* pcb,
+        std::vector<std::unique_ptr<IORequest>> requests,
+        int latency_ms = 100
+    );
+
+    // API legada — não usada no multicore, mas deixada por compatibilidade
     void registerProcessWaitingForIO(PCB* process);
 
-private:
-    void managerLoop();
+    // Adiciona request avulsa
     void addRequest(std::unique_ptr<IORequest> request);
 
-    // Fila de requisições prontas para serem executadas
-    std::vector<std::unique_ptr<IORequest>> requests;
-    std::mutex queueLock;
+    // Usado pela thread interna
+    void step();
 
-    // Fila de processos que estão no estado BLOCKED esperando por um dispositivo
-    std::vector<PCB*> waiting_processes;
-    std::mutex waiting_processes_lock;
+    size_t pendingCount() const;
 
-    // Variáveis booleanas representando o estado de cada dispositivo (0/1)
+private:
+    struct Entry {
+        PCB* pcb;
+        std::vector<std::unique_ptr<IORequest>> requests;
+        int remaining_ms;
+    };
+
+    std::vector<Entry> queue;    // processos em IO real
+    mutable std::mutex queueLock;
+
+    std::vector<PCB*> waiting_processes; // legacy
+    mutable std::mutex waiting_processes_lock;
+
     bool printer_requesting;
     bool disk_requesting;
     bool network_requesting;
     std::mutex device_state_lock;
 
-    bool shutdown_flag;
-    std::thread managerThread;
-
     std::ofstream resultFile;
     std::ofstream outputFile;
-};
 
-#endif // IOMANAGER_HPP 
+    std::thread managerThread;
+    bool shutdown_flag;
+
+    void processEntry(Entry &e);
+    void managerLoop();
+};

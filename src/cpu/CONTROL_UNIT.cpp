@@ -18,9 +18,10 @@
 
 static std::mutex log_mutex;
 
-
-
 using namespace std;
+
+Control_Unit::Control_Unit() {}
+Control_Unit::~Control_Unit() {}
 
 void Control_Unit::log_operation(const std::string &msg) {
     std::lock_guard<std::mutex> lock(log_mutex);
@@ -38,7 +39,6 @@ void Control_Unit::log_operation(const std::string &msg) {
         fout << msg << "\n";
     }
 }
-
 
 // Helpers
 static uint32_t binaryStringToUint(const std::string &bin) {
@@ -142,10 +142,21 @@ string Control_Unit::Identificacao_instrucao(uint32_t instruction, hw::REGISTER_
 
 void Control_Unit::Fetch(ControlContext &context) {
     account_stage(context.process);
-    // MAR <- PC
+    // MAR <- PC (mantemos PC em bytes)
     context.registers.mar.write(context.registers.pc.value);
-    // Read memory at MAR (endereçamento em bytes presunção: PC em bytes)
-    uint32_t instr = context.memManager.read(context.registers.mar.read(), context.process);
+
+    // Read memory at MAR.
+    // IMPORTANT: MemoryManager / Cache espera endereços por palavra (word index).
+    // Como PC está em bytes, convertemos para índice de palavra dividindo por 4.
+    uint32_t word_index = 0;
+    if (context.registers.mar.read() % 4 != 0) {
+        // PC desalinhado — melhor arredondar para baixo (comentarava / log)
+        word_index = context.registers.mar.read() / 4;
+    } else {
+        word_index = context.registers.mar.read() / 4;
+    }
+
+    uint32_t instr = context.memManager.read(word_index, context.process);
     context.registers.ir.write(instr);
 
     // === TRACE FETCH ===
@@ -293,7 +304,7 @@ void Control_Unit::Execute_Immediate_Operation(hw::REGISTER_BANK &registers, Ins
 void Control_Unit::Execute_Aritmetic_Operation(hw::REGISTER_BANK &registers, Instruction_Data &data) {
     std::string name_rs = this->map.getRegisterName(binaryStringToUint(data.source_register));
     std::string name_rt = this->map.getRegisterName(binaryStringToUint(data.target_register));
-    std::string name_rd = this->map.getRegisterName(binaryStringToUint(data.target_register));
+    std::string name_rd = this->map.getRegisterName(binaryStringToUint(data.destination_register)); // CORREÇÃO AQUI
 
     int32_t val_rs = registers.readRegister(name_rs);
     int32_t val_rt = registers.readRegister(name_rt);
@@ -359,12 +370,29 @@ void Control_Unit::Execute_Loop_Operation(hw::REGISTER_BANK &registers, Instruct
     else if (data.op == "BGT") { alu.op = BGT; alu.calculate(); if (alu.result == 1) jump = true; }
 
     if (jump) {
-        uint32_t addr = binaryStringToUint(data.addressRAMResult);
+        uint32_t addr = 0;
+        if (data.op == "J") {
+            // J-type: instr26 << 2 (target in bytes)
+            addr = binaryStringToUint(data.addressRAMResult) << 2;
+        } else {
+            // Branches: offset is sign-extended immediate; convert to bytes (imm * 4)
+            // Note: data.immediate já é sign-extended 16 bits -> 32 bits
+            int32_t byte_offset = data.immediate * 4; // safe multiply
+            // In many MIPS conventions branch is relative to PC (already incremented in Fetch)
+            // Here we set PC to current PC + byte_offset
+            addr = static_cast<uint32_t>(registers.pc.read() + byte_offset);
+        }
+
         // TRACE BRANCH/JUMP
         std::cout << "[BRANCH] OP=" << data.op << " taken, new PC=" << addr << "\n";
 
+        // Escrevemos PC em bytes
         registers.pc.write(addr);
-        registers.ir.write(memManager.read(registers.pc.read(), process));
+
+        // Carregamos nova instrução em IR a partir do novo PC:
+        uint32_t read_index = registers.pc.read() / 4;
+        registers.ir.write(memManager.read(read_index, process));
+
         counter = 0; counterForEnd = 5; programEnd = false;
     }
 }
@@ -392,8 +420,11 @@ void Control_Unit::Memory_Acess(Instruction_Data &data, ControlContext &context)
     account_stage(context.process);
     string name_rt = this->map.getRegisterName(binaryStringToUint(data.target_register));
     if (data.op == "LW") {
+        // immediate/address is given in data.addressRAMResult as bits; interpret as byte address
         uint32_t addr = binaryStringToUint(data.addressRAMResult);
-        int value = context.memManager.read(addr, context.process);
+        // MemoryManager expects word index -> convert bytes -> words
+        uint32_t word_index = addr / 4;
+        int value = context.memManager.read(word_index, context.process);
         context.registers.writeRegister(name_rt, value);
 
         std::cout << "[MEMORY] LW addr=" << addr << " value=" << value
@@ -406,7 +437,8 @@ void Control_Unit::Memory_Acess(Instruction_Data &data, ControlContext &context)
                   << " value=" << static_cast<int>(val) << "\n";
     } else if (data.op == "PRINT" && data.target_register.empty()) {
         uint32_t addr = binaryStringToUint(data.addressRAMResult);
-        int value = context.memManager.read(addr, context.process);
+        uint32_t word_index = addr / 4;
+        int value = context.memManager.read(word_index, context.process);
         auto req = std::make_unique<IORequest>();
         req->msg = std::to_string(value);
         req->process = &context.process;
@@ -426,15 +458,18 @@ void Control_Unit::Write_Back(Instruction_Data &data, ControlContext &context) {
     account_stage(context.process);
     if (data.op == "SW") {
         uint32_t addr = binaryStringToUint(data.addressRAMResult);
+        // memory expects word index
+        uint32_t word_index = addr / 4;
         string name_rt = this->map.getRegisterName(binaryStringToUint(data.target_register));
         int value = context.registers.readRegister(name_rt);
-        context.memManager.write(addr, value, context.process);
+        context.memManager.write(word_index, value, context.process);
 
         std::cout << "[WRITE-BACK] SW addr=" << addr << " value=" << value
                   << " from reg " << name_rt << "\n";
     }
 }
 
+/*
 // A função Core agora espera um ponteiro para o PCB, pois o PCB não é mais copiável
 void* Core(MemoryManager &memoryManager, PCB &process, vector<unique_ptr<IORequest>>* ioRequests, bool &printLock) {
     Control_Unit UC;
@@ -529,3 +564,5 @@ void* Core(MemoryManager &memoryManager, PCB &process, vector<unique_ptr<IOReque
 
     return nullptr;
 }
+*/
+
