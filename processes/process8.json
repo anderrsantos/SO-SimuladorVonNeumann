@@ -1,0 +1,19 @@
+{
+  "pid": 303,
+  "name": "jump_print",
+  "quantum": 200,
+  "priority": 3,
+  "mem_weights": { "primary": 5, "secondary": 20 },
+  "program": {
+    "data": [],
+    "code": [
+      235929605,
+      268468224,
+      554041343,
+      83951612,
+      4227858432
+    ],
+    "labels": { "start": 0, "end": 20 },
+    "data_symbols": {}
+  }
+}

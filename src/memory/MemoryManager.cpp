@@ -105,6 +105,20 @@ uint32_t MemoryManager::read(uint32_t address, PCB& process) {
     process.mem_accesses_total.fetch_add(1);
     process.mem_reads.fetch_add(1);
 
+    // Se não houver cache configurada, ler diretamente da memória
+    if (!L1_cache) {
+        if (address < mainMemoryLimit) {
+            process.primary_mem_accesses.fetch_add(1);
+            process.memory_cycles.fetch_add(process.memWeights.primary);
+            return mainMemory->ReadMem(address);
+        } else {
+            process.secondary_mem_accesses.fetch_add(1);
+            process.memory_cycles.fetch_add(process.memWeights.secondary);
+            uint32_t secAddr = address - mainMemoryLimit;
+            return secondaryMemory->ReadMem(secAddr);
+        }
+    }
+
     // Tenta pegar da cache
     size_t cache_data = L1_cache->get(address);
     if (cache_data != CACHE_MISS) {
@@ -113,7 +127,7 @@ uint32_t MemoryManager::read(uint32_t address, PCB& process) {
         process.memory_cycles.fetch_add(process.memWeights.cache);
 
         contabiliza_cache(process, true);
-        return cache_data;
+        return static_cast<uint32_t>(cache_data);
     }
 
     contabiliza_cache(process, false);
@@ -134,7 +148,7 @@ uint32_t MemoryManager::read(uint32_t address, PCB& process) {
         data_from_mem = secondaryMemory->ReadMem(secAddr);
     }
 
-    // Coloca em cache
+    // Coloca em cache (write-allocate on read miss)
     L1_cache->put(address, data_from_mem, this);
 
     return data_from_mem;
@@ -148,19 +162,33 @@ void MemoryManager::write(uint32_t address, uint32_t data, PCB& process) {
     process.mem_accesses_total.fetch_add(1);
     process.mem_writes.fetch_add(1);
 
+    // 1) Escreve imediatamente na memória principal/secundária (write-through)
+    writeToFile(address, data);
+
+    // 2) Agora atualiza a cache (se houver)
+    if (!L1_cache) {
+        // Sem cache: contadores de memória já atualizados por writeToFile
+        process.memory_cycles.fetch_add(process.memWeights.primary); // aproximação
+        return;
+    }
+
+    // Verifica se a linha está na cache
     size_t cache_data = L1_cache->get(address);
 
     if (cache_data == CACHE_MISS) {
+        // MISS: contabiliza miss e aloca/insere a linha com o novo valor
         contabiliza_cache(process, false);
-        read(address, process); // para trazer o bloco (write-back style)
+        // Inserir o novo dado na cache (write-allocate)
+        L1_cache->put(address, data, this);
     } else {
+        // HIT: contabiliza hit e atualiza a entrada
         contabiliza_cache(process, true);
+        L1_cache->update(address, data);
     }
 
-    // Update marca como dirty
-    L1_cache->update(address, data);
-
+    // estatísticas de cache/memória
     process.cache_mem_accesses.fetch_add(1);
+    // já contabilizamos cycles pela memória (writeToFile), ajustar ciclos de cache também
     process.memory_cycles.fetch_add(process.memWeights.cache);
 }
 

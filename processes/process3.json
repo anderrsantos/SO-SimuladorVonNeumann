@@ -1,0 +1,15 @@
+{
+  "pid": 103,
+  "name": "short_task",
+  "quantum": 80,
+  "priority": 3,
+  "mem_weights": { "primary": 6, "secondary": 15 },
+  "program": {
+    "data": [],
+    "code": [
+      17387552, 537460741, 940048507, 4227858432
+    ],
+    "labels": { "start": 0, "end": 16 },
+    "data_symbols": {}
+  }
+}
