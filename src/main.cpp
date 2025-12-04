@@ -60,6 +60,7 @@ static vector<string> resolve_process_files(int argc, char** argv) {
 int main(int argc, char** argv) {
 
     ios::sync_with_stdio(false);
+    cin.tie(nullptr);
 
     // ------------------------ CONFIGURAÇÃO ------------------------
     const size_t RAM_SIZE       = 4096;
@@ -233,8 +234,13 @@ int main(int argc, char** argv) {
 
     // ------------------------ MÉTRICAS ------------------------
     auto reports = Metrics::collect(allPCBs);
+    // <-- Corrigido: passar 'multicore' para coletar métricas dos núcleos
+    auto core_reports = Metrics::collectCores(multicore.getCores());
 
+    
     Metrics::printConsole(reports);
+    // <-- Corrigido: imprimir as métricas de core usando 'core_reports'
+    Metrics::printCoreMetrics(core_reports);
     //Metrics::saveCSV(reports, "output/metrics.csv");
     //Metrics::saveJSON(reports, "output/metrics.json");
 

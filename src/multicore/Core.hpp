@@ -10,12 +10,8 @@
 #include "../memory/MemoryManager.hpp"
 #include "../cpu/CONTROL_UNIT.hpp"
 
-
 // =====================================================================================
 //                       CoreEvent — EVENTO DO PIPELINE
-// =====================================================================================
-// Contém: tipo do evento, PCB, id do core e IORequests movíveis.
-// NÃO pode ser copiado porque contém unique_ptr.
 // =====================================================================================
 
 struct CoreEvent {
@@ -39,11 +35,9 @@ struct CoreEvent {
     CoreEvent(Type t, PCB* p, int id)
         : type(t), pcb(p), coreId(id) {}
 
-    // ❌ PROIBIR CÓPIA (required por causa do unique_ptr)
     CoreEvent(const CoreEvent&) = delete;
     CoreEvent& operator=(const CoreEvent&) = delete;
 
-    // ✔ HABILITAR MOVIMENTO
     CoreEvent(CoreEvent&&) = default;
     CoreEvent& operator=(CoreEvent&&) = default;
 };
@@ -73,6 +67,22 @@ public:
     LocalState getState() const { return state; }
     PCB* getCurrentPCB() const { return current; }
 
+    // ============================
+    //    NOVO → MÉTRICAS DO CORE
+    // ============================
+    void updateCoreTime();  // chamado pelo MultiCore a cada tick
+
+    uint64_t getRunningTime() const { return time_running; }
+    uint64_t getIdleTime() const { return time_idle; }
+    uint64_t getWaitingIOTime() const { return time_waiting_io; }
+
+    // ============================================
+    //           NOVAS MÉTRICAS DO CORE
+    // ============================================
+    uint64_t time_running   = 0;
+    uint64_t time_idle      = 0;
+    uint64_t time_waiting_io = 0;
+
 private:
 
     int coreId;
@@ -96,8 +106,10 @@ private:
     bool endProgram;
     bool endExecution;
 
-    // Buffer de IO Requests gerados pelo pipeline
     std::vector<std::unique_ptr<IORequest>> ioRequests;
 
     int clockCounter;
+
+
 };
+

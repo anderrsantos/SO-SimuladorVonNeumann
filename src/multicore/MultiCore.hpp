@@ -23,6 +23,11 @@ public:
     bool hasActiveCores() const;
     size_t numCores() const { return cores.size(); }
 
+    // ADICIONAR AQUI:
+    const std::vector<std::unique_ptr<Core>>& getCores() const {
+        return cores;
+    }
+
 private:
     std::vector<std::unique_ptr<Core>> cores;
     MemoryManager* memManager;
