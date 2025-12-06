@@ -1,0 +1,32 @@
+{
+  "pid": 4,
+  "name": "processo_quantum_pequeno",
+  "quantum": 3,
+  "priority": 4,
+  "mem_weights": {
+    "primary": 5,
+    "secondary": 20
+  },
+  "program": {
+    "data": [],
+    "code": [
+      940048507,
+      537460741,
+      17387552,
+      1074397184,
+      4227858432,
+      940048507,
+      537460741,
+      17387552,
+      1074397184,
+      4227858432,
+      940048507,
+      537460741
+    ],
+    "labels": {
+      "start": 0,
+      "end": 48
+    },
+    "data_symbols": {}
+  }
+}

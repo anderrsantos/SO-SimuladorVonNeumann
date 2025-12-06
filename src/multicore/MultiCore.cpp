@@ -47,3 +47,11 @@ bool MultiCore::hasActiveCores() const {
     for (auto &cptr : cores) if (!cptr->isIdle()) return true;
     return false;
 }
+
+size_t MultiCore::countActiveCores() const {
+    size_t count = 0;
+    for (auto &cptr : cores) {
+        if (!cptr->isIdle()) count++;
+    }
+    return count;
+}

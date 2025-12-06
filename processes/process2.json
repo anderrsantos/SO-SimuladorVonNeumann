@@ -1,8 +1,8 @@
 {
-  "pid": 1,
-  "name": "processo_curto_alta_prioridade",
-  "quantum": 5,
-  "priority": 5,
+  "pid": 2,
+  "name": "processo_medio_prioridade_media",
+  "quantum": 10,
+  "priority": 3,
   "mem_weights": {
     "primary": 5,
     "secondary": 20
@@ -12,11 +12,18 @@
     "code": [
       940048507,
       537460741,
+      17387552,
+      1074397184,
+      4227858432,
+      940048507,
+      537460741,
+      17387552,
+      1074397184,
       4227858432
     ],
     "labels": {
       "start": 0,
-      "end": 12
+      "end": 40
     },
     "data_symbols": {}
   }

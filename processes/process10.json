@@ -1,19 +1,17 @@
 {
-  "pid": 1,
-  "name": "processo_curto_alta_prioridade",
-  "quantum": 5,
-  "priority": 5,
+  "pid": 10,
+  "name": "processo_10_size_3",
+  "quantum": 10,
+  "priority": 1,
   "mem_weights": {
     "primary": 5,
     "secondary": 20
   },
   "program": {
     "data": [],
-    "code": [
-      940048507,
+    "code": [940048507,
       537460741,
-      4227858432
-    ],
+      17387552],
     "labels": {
       "start": 0,
       "end": 12

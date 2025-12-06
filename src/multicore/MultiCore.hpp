@@ -22,6 +22,7 @@ public:
 
     bool hasActiveCores() const;
     size_t numCores() const { return cores.size(); }
+    size_t countActiveCores() const; // Conta quantos cores estão ativos
 
 private:
     std::vector<std::unique_ptr<Core>> cores;

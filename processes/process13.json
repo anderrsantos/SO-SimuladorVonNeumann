@@ -1,0 +1,24 @@
+{
+  "pid": 13,
+  "name": "processo_13_size_6",
+  "quantum": 19,
+  "priority": 4,
+  "mem_weights": {
+    "primary": 5,
+    "secondary": 20
+  },
+  "program": {
+    "data": [],
+    "code": [940048507,
+      537460741,
+      17387552,
+      1074397184,
+      4227858432,
+      940048507],
+    "labels": {
+      "start": 0,
+      "end": 24
+    },
+    "data_symbols": {}
+  }
+}
