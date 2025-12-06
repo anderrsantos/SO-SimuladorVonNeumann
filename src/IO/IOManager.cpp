@@ -1,41 +1,43 @@
+// IOManager.cpp
 #include "IOManager.hpp"
 #include <iostream>
-#include <cstdlib>
-#include <ctime>
+#include <iomanip>
 #include <algorithm>
 
-// ---------------------------------------------------
-// CONSTRUTOR
-// ---------------------------------------------------
-IOManager::IOManager() :
-    printer_requesting(false),
-    disk_requesting(false),
-    network_requesting(false),
-    shutdown_flag(false)
+using namespace std::chrono_literals;
+
+IOManager::IOManager()
+    : printer_requesting(false),
+      disk_requesting(false),
+      network_requesting(false),
+      shutdown_flag(false)
 {
-    srand(static_cast<unsigned int>(time(nullptr)));
+    // abrir arquivos de resultado (append para não sobrescrever durante dev)
+    resultFile.open("output/io_results.csv", std::ios::out | std::ios::app);
+    outputFile.open("output/io_output.dat", std::ios::out | std::ios::app);
 
-    resultFile.open("result.dat", std::ios::app);
-    outputFile.open("output.dat", std::ios::app);
-
-    if (!resultFile || !outputFile) {
-        std::cerr << "Erro: não foi possível abrir arquivos de saída." << std::endl;
+    // cabeçalho caso arquivo vazio
+    if (resultFile.is_open()) {
+        resultFile << "pid,op,msg,enqueued_ms,started_ms,completed_ms,wait_ms,service_ms\n";
     }
 
+    // iniciar thread gerente
     managerThread = std::thread(&IOManager::managerLoop, this);
 }
 
 IOManager::~IOManager() {
-    shutdown_flag = true;
-    if (managerThread.joinable())
-        managerThread.join();
-    resultFile.close();
-    outputFile.close();
+    // sinalizar encerramento e aguardar a thread
+    {
+        std::lock_guard<std::mutex> lk(queueLock);
+        shutdown_flag = true;
+    }
+    if (managerThread.joinable()) managerThread.join();
+
+    if (resultFile.is_open()) resultFile.close();
+    if (outputFile.is_open()) outputFile.close();
 }
 
-// ---------------------------------------------------
-// OPÇÃO A — integração real com Core
-// ---------------------------------------------------
+// API chamada pelo scheduler/core quando o processo bloqueia com requests
 void IOManager::registerProcessWaitingForIO(
     PCB* pcb,
     std::vector<std::unique_ptr<IORequest>> requests,
@@ -43,161 +45,218 @@ void IOManager::registerProcessWaitingForIO(
 ) {
     if (!pcb) return;
 
-    std::lock_guard<std::mutex> lock(queueLock);
     Entry e;
-
     e.pcb = pcb;
     e.requests = std::move(requests);
+    e.enqueue_time = std::chrono::steady_clock::now();
 
-    // calcula custo total/maior
-    int max_ms = latency_ms;
-    for (auto &r : e.requests) {
-        if (r && r->cost_cycles.count() > max_ms)
-            max_ms = r->cost_cycles.count();
+    // Soma custos das requests para formar tempo estimado; inclui latency_ms
+    int total_cost = latency_ms;
+    for (const auto &r : e.requests) {
+        if (r) total_cost += static_cast<int>(r->cost_cycles.count());
     }
+    e.remaining_ms = std::max(1, total_cost);
 
-    e.remaining_ms = max_ms;
-
+    // marca processo bloqueado (se você quiser redundância; o Core já faz isso)
     pcb->state = State::Blocked;
-    queue.push_back(std::move(e));
+
+    {
+        std::lock_guard<std::mutex> lk(queueLock);
+        queue.push_back(std::move(e));
+    }
 }
 
-// ---------------------------------------------------
-// Versão legada (mantida mas não usada)
-// ---------------------------------------------------
+// API legada (sem requests)
 void IOManager::registerProcessWaitingForIO(PCB* process) {
     if (!process) return;
-    std::lock_guard<std::mutex> lock(waiting_processes_lock);
-    waiting_processes.push_back(process);
+    // cria Entry com request "nop" apenas para ocupar o dispositivo por 100ms
+    auto req = std::make_unique<IORequest>();
+    req->operation = "nop";
+    req->msg = "";
+    req->process = process;
+    req->cost_cycles = std::chrono::milliseconds(100);
+
+    std::vector<std::unique_ptr<IORequest>> v;
+    v.push_back(std::move(req));
+    registerProcessWaitingForIO(process, std::move(v), 0);
 }
 
-// ---------------------------------------------------
+// adiciona request avulsa (processo já embutido no request)
 void IOManager::addRequest(std::unique_ptr<IORequest> request) {
-    if (!request || !request->process) return;
-
-    std::lock_guard<std::mutex> lock(queueLock);
+    if (!request) return;
     Entry e;
     e.pcb = request->process;
+    e.enqueue_time = std::chrono::steady_clock::now();
+    e.remaining_ms = static_cast<int>(request->cost_cycles.count());
     e.requests.push_back(std::move(request));
-    e.remaining_ms = static_cast<int>(e.requests.back()->cost_cycles.count());
-    e.pcb->state = State::Blocked;
-    queue.push_back(std::move(e));
+
+    if (e.pcb) e.pcb->state = State::Blocked;
+
+    {
+        std::lock_guard<std::mutex> lk(queueLock);
+        queue.push_back(std::move(e));
+    }
 }
 
-// ---------------------------------------------------
-// step() — avança processamento
-// ---------------------------------------------------
+// compatibilidade: modo síncrono — processa decrementando remaining_ms com base em tempo passado
 void IOManager::step() {
+    auto now = std::chrono::steady_clock::now();
+    // Para modo síncrono, usamos um delta fixo de 10ms por step
+    const int delta_ms = 10;
+
     std::vector<Entry> finished;
 
     {
-        std::lock_guard<std::mutex> lock(queueLock);
-
+        std::lock_guard<std::mutex> lk(queueLock);
         for (auto &e : queue) {
-            int step_ms = 50;
-            e.remaining_ms -= step_ms;
-            e.pcb->io_cycles.fetch_add(step_ms);
-
-            if (e.remaining_ms <= 0)
-                finished.push_back(std::move(e));
+            e.remaining_ms -= delta_ms;
+            if (e.remaining_ms <= 0) finished.push_back(std::move(e));
         }
-
-        // remover finalizados
-        queue.erase(
-            std::remove_if(
-                queue.begin(), queue.end(),
-                [&](const Entry &entry){
-                    for (auto &done : finished)
-                        if (done.pcb == entry.pcb) return true;
-                    return false;
-                }
-            ),
-            queue.end()
-        );
+        // remover finished da queue
+        queue.erase(std::remove_if(queue.begin(), queue.end(),
+            [](const Entry &x){ return x.remaining_ms <= 0; }), queue.end());
     }
 
-    // processar finalizados
+    // processar fora do lock
     for (auto &e : finished) {
+        processEntry(e);
+    }
+}
 
-        // imprime/armazenar requests
-        for (auto &r : e.requests) {
-            if (r && !r->msg.empty()) {
-                std::cout << "[IO] PID=" << e.pcb->pid << " => " << r->operation
-                          << " | MSG: " << r->msg << "\n";
+size_t IOManager::pendingCount() const {
+    std::lock_guard<std::mutex> lk(queueLock);
+    return queue.size();
+}
 
-                if (resultFile)
-                    resultFile << e.pcb->pid << " | " << r->operation << " | " << r->msg << "\n";
-
-                if (outputFile)
-                    outputFile << e.pcb->pid << "," << r->operation << "," 
-                               << r->cost_cycles.count() << "\n";
+// função que realiza o trabalho quando uma Entry completa
+void IOManager::processEntry(Entry &e) {
+    if (!e.pcb) {
+        // se não houver processo associado, apenas process requests (fire-and-forget)
+        for (auto &rptr : e.requests) {
+            if (!rptr) continue;
+            // Apenas operações de saída (print) implementadas por enquanto
+            if (rptr->operation == "print") {
+                if (outputFile.is_open()) {
+                    outputFile << "pid=0, print: " << rptr->msg << "\n";
+                }
+                std::cout << "[IO] print (no-pcb): " << rptr->msg << "\n";
             }
         }
+        return;
+    }
 
+    auto start_time = std::chrono::steady_clock::now();
+    // espera = tempo desde enqueue até começar a executar
+    auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(start_time - e.enqueue_time).count();
+
+    // executar cada request (simulado)
+    int service_ms_total = 0;
+    for (auto &rptr : e.requests) {
+        if (!rptr) continue;
+        int cost = static_cast<int>(rptr->cost_cycles.count());
+        service_ms_total += cost;
+
+        if (rptr->operation == "print") {
+            // grava no outputFile e no console
+            if (outputFile.is_open()) {
+                outputFile << e.pcb->pid << ",PRINT," << rptr->msg << "\n";
+            }
+            std::cout << "[IO] (pid=" << e.pcb->pid << ") PRINT: " << rptr->msg << "\n";
+        } else if (rptr->operation == "nop") {
+            // nada
+        } else {
+            // operação desconhecida -> log
+            std::cout << "[IO] (pid=" << e.pcb->pid << ") OP=" << rptr->operation
+                      << " MSG=" << rptr->msg << "\n";
+        }
+    }
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto service_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+    // Atualiza métricas no PCB (assume que pcb->io_cycles é std::atomic<uint64_t>)
+    try {
+        // io_cycles: total de ms gastos em I/O (espera + serviço)
+        uint64_t total_ms = static_cast<uint64_t>(wait_ms + service_ms);
+        e.pcb->io_cycles.fetch_add(total_ms);
+
+        // Se PCB tiver campos adicionais para espera/serviço, ideal seria incrementá-los aqui.
+        // Exemplo (comentado caso não existam):
+        // e.pcb->io_wait_ms.fetch_add(static_cast<uint64_t>(wait_ms));
+        // e.pcb->io_service_ms.fetch_add(static_cast<uint64_t>(service_ms));
+    } catch (...) {
+        // se o PCB não tiver os campos esperados, não queremos abortar;
+        // apenas continuamos (não fatal).
+    }
+
+    // gravar no arquivo de métricas (resultFile)
+    if (resultFile.is_open()) {
+        for (auto &rptr : e.requests) {
+            if (!rptr) continue;
+            // enqueued_ms/start_ms/completed_ms calculados relativos a epoch
+            auto enq = std::chrono::duration_cast<std::chrono::milliseconds>(e.enqueue_time.time_since_epoch()).count();
+            auto st = std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count();
+            auto ed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count();
+
+            resultFile << e.pcb->pid << ","
+                       << rptr->operation << ","
+                       << std::quoted(rptr->msg) << ","
+                       << enq << "," << st << "," << ed << ","
+                       << wait_ms << "," << service_ms << "\n";
+        }
+        resultFile.flush();
+    }
+
+    // Se houver callback (Scheduler.add), chamar para re-enfileirar o PCB como READY
+    if (readyCallback) {
+        // setar estado antes de callback
+        e.pcb->state = State::Ready;
+        readyCallback(e.pcb);
+    } else {
+        // sem callback — apenas marcar ready
         e.pcb->state = State::Ready;
     }
 }
 
-// ---------------------------------------------------
-void IOManager::processEntry(Entry &e) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(e.remaining_ms));
-    for (auto &r : e.requests)
-        if (r && !r->msg.empty())
-            std::cout << "[IO] PID=" << e.pcb->pid << " => " << r->msg << "\n";
-    e.pcb->state = State::Ready;
-}
-
-// ---------------------------------------------------
+// Thread que gerencia a fila: subtrai tempo até 0 e finaliza entries
 void IOManager::managerLoop() {
-    while (!shutdown_flag) {
-
-        // (LEGACY — processa processos sem requests específicas)
+    auto last = std::chrono::steady_clock::now();
+    while (true) {
+        // checar shutdown
         {
-            std::lock_guard<std::mutex> lock(device_state_lock);
-            if (rand() % 100 == 0) printer_requesting = true;
-            if (rand() % 50 == 0)  disk_requesting = true;
+            std::lock_guard<std::mutex> lk(queueLock);
+            if (shutdown_flag && queue.empty()) break;
         }
 
+        auto now = std::chrono::steady_clock::now();
+        auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count();
+        if (delta <= 0) delta = 1; // mínima progressão
+        last = now;
+
+        std::vector<Entry> completed;
+
         {
-            std::lock_guard<std::mutex> wlock(waiting_processes_lock);
-            if (!waiting_processes.empty()) {
+            std::lock_guard<std::mutex> lk(queueLock);
 
-                std::lock_guard<std::mutex> dlock(device_state_lock);
-
-                PCB* process_to_service = waiting_processes.front();
-                std::unique_ptr<IORequest> new_request = nullptr;
-
-                if (printer_requesting) {
-                    new_request = std::make_unique<IORequest>();
-                    new_request->operation = "print_job";
-                    new_request->msg = "Legacy printing...";
-                    new_request->process = process_to_service;
-                    new_request->cost_cycles = std::chrono::milliseconds(200);
-                    printer_requesting = false;
-                }
-                else if (disk_requesting) {
-                    new_request = std::make_unique<IORequest>();
-                    new_request->operation = "disk_read";
-                    new_request->msg = "Legacy disk read...";
-                    new_request->process = process_to_service;
-                    new_request->cost_cycles = std::chrono::milliseconds(150);
-                    disk_requesting = false;
-                }
-
-                if (new_request) {
-                    waiting_processes.erase(waiting_processes.begin());
-                    addRequest(std::move(new_request));
+            for (auto &e : queue) {
+                e.remaining_ms -= static_cast<int>(delta);
+                if (e.remaining_ms <= 0) {
+                    completed.push_back(std::move(e));
                 }
             }
+
+            // remover completadas da fila
+            queue.erase(std::remove_if(queue.begin(), queue.end(),
+                                       [](const Entry &x){ return x.remaining_ms <= 0; }),
+                        queue.end());
         }
 
-        step();
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-}
+        // processar completadas sem segurar o lock
+        for (auto &e : completed) {
+            processEntry(e);
+        }
 
-// ---------------------------------------------------
-size_t IOManager::pendingCount() const {
-    std::lock_guard<std::mutex> lock(queueLock);
-    return queue.size();
+        // dormir um pouco para não busy-wait (ajustável)
+        std::this_thread::sleep_for(10ms);
+    }
 }

@@ -142,24 +142,17 @@ string Control_Unit::Identificacao_instrucao(uint32_t instruction, hw::REGISTER_
 
 void Control_Unit::Fetch(ControlContext &context) {
     account_stage(context.process);
-    // MAR <- PC (mantemos PC em bytes)
+
+    // PC agora representa índice de palavra (não bytes)
     context.registers.mar.write(context.registers.pc.value);
 
-    // Read memory at MAR.
-    // IMPORTANT: MemoryManager / Cache espera endereços por palavra (word index).
-    // Como PC está em bytes, convertemos para índice de palavra dividindo por 4.
-    uint32_t word_index = 0;
-    if (context.registers.mar.read() % 4 != 0) {
-        // PC desalinhado — melhor arredondar para baixo (comentarava / log)
-        word_index = context.registers.mar.read() / 4;
-    } else {
-        word_index = context.registers.mar.read() / 4;
-    }
+    uint32_t word_index = context.registers.pc.value;
 
+    // Lê instrução diretamente da memória (endereçada por palavra)
     uint32_t instr = context.memManager.read(word_index, context.process);
     context.registers.ir.write(instr);
 
-    // === TRACE FETCH ===
+    // TRACE FETCH
     std::cout << "[FETCH] PC=" << context.registers.pc.value
               << " MAR=" << context.registers.mar.read()
               << " INSTR=0x" << std::hex << instr << std::dec
@@ -170,8 +163,9 @@ void Control_Unit::Fetch(ControlContext &context) {
         context.endProgram = true;
         return;
     }
-    // PC <- PC + 4 (endereçamento por byte)
-    context.registers.pc.write(context.registers.pc.value + 4);
+
+    // PC ← PC + 1 (próxima WORD)
+    context.registers.pc.write(context.registers.pc.value + 1);
 }
 
 void Control_Unit::Decode(hw::REGISTER_BANK &registers, Instruction_Data &data) {
@@ -236,7 +230,6 @@ void Control_Unit::Decode(hw::REGISTER_BANK &registers, Instruction_Data &data) 
                   << " immediate(signed)=" << data.immediate << "\n";
     }
 }
-
 
 void Control_Unit::Execute_Immediate_Operation(hw::REGISTER_BANK &registers, Instruction_Data &data) {
     std::string name_rs = this->map.getRegisterName(binaryStringToUint(data.source_register));
@@ -352,9 +345,9 @@ void Control_Unit::Execute_Operation(Instruction_Data &data, ControlContext &con
     }
 }
 
-void Control_Unit::Execute_Loop_Operation(hw::REGISTER_BANK &registers, Instruction_Data &data,
-                                          int &counter, int &counterForEnd, bool &programEnd,
-                                          MemoryManager &memManager, PCB &process) {
+void Control_Unit::Execute_Loop_Operation( hw::REGISTER_BANK &registers, Instruction_Data &data,
+    int &counter, int &counterForEnd, bool &programEnd, MemoryManager &memManager,PCB &process)
+{
     string name_rs = this->map.getRegisterName(binaryStringToUint(data.source_register));
     string name_rt = this->map.getRegisterName(binaryStringToUint(data.target_register));
 
@@ -363,39 +356,51 @@ void Control_Unit::Execute_Loop_Operation(hw::REGISTER_BANK &registers, Instruct
     alu.B = registers.readRegister(name_rt);
 
     bool jump = false;
-    if (data.op == "BEQ") { alu.op = BEQ; alu.calculate(); if (alu.result == 1) jump = true; }
-    else if (data.op == "BNE") { alu.op = BNE; alu.calculate(); if (alu.result == 1) jump = true; }
+
+    if (data.op == "BEQ") { alu.op = BEQ; alu.calculate(); jump = (alu.result == 1); }
+    else if (data.op == "BNE") { alu.op = BNE; alu.calculate(); jump = (alu.result == 1); }
+    else if (data.op == "BLT") { alu.op = BLT; alu.calculate(); jump = (alu.result == 1); }
+    else if (data.op == "BGT") { alu.op = BGT; alu.calculate(); jump = (alu.result == 1); }
     else if (data.op == "J") { jump = true; }
-    else if (data.op == "BLT") { alu.op = BLT; alu.calculate(); if (alu.result == 1) jump = true; }
-    else if (data.op == "BGT") { alu.op = BGT; alu.calculate(); if (alu.result == 1) jump = true; }
 
     if (jump) {
         uint32_t addr = 0;
-        if (data.op == "J") {
-            // J-type: instr26 << 2 (target in bytes)
-            addr = binaryStringToUint(data.addressRAMResult) << 2;
-        } else {
-            // Branches: offset is sign-extended immediate; convert to bytes (imm * 4)
-            // Note: data.immediate já é sign-extended 16 bits -> 32 bits
-            int32_t byte_offset = data.immediate * 4; // safe multiply
-            // In many MIPS conventions branch is relative to PC (already incremented in Fetch)
-            // Here we set PC to current PC + byte_offset
-            addr = static_cast<uint32_t>(registers.pc.read() + byte_offset);
+
+        if (data.op == "J")
+        {
+            // Antes: addr = instr26 << 2;
+            // Agora: addr = índice de palavra diretamente
+            addr = binaryStringToUint(data.addressRAMResult);
+        }
+        else
+        {
+            // Branch offset já está em WORDS
+            // Antes: offset em bytes -> imm * 4
+            // Agora: offset é word offset
+            int32_t word_offset = data.immediate;
+
+            // PC já está em word addressing
+            addr = static_cast<uint32_t>(registers.pc.read() + word_offset);
         }
 
-        // TRACE BRANCH/JUMP
+        // LOG DO BRANCH
         std::cout << "[BRANCH] OP=" << data.op << " taken, new PC=" << addr << "\n";
 
-        // Escrevemos PC em bytes
+        // Atualiza PC (word-based)
         registers.pc.write(addr);
 
-        // Carregamos nova instrução em IR a partir do novo PC:
-        uint32_t read_index = registers.pc.read() / 4;
-        registers.ir.write(memManager.read(read_index, process));
+        // Carrega nova instrução (PC agora é word index)
+        registers.ir.write(memManager.read(registers.pc.read(), process));
 
-        counter = 0; counterForEnd = 5; programEnd = false;
+        counter = 0;
+        counterForEnd = 5;
+        programEnd = false;
     }
 }
+
+
+
+
 
 void Control_Unit::Execute(Instruction_Data &data, ControlContext &context) {
     account_stage(context.process);

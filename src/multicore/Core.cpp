@@ -16,13 +16,37 @@ Core::Core(int id, MemoryManager* memManager_, IOManager* ioManager_, bool* prin
       counterForEnd(5),
       endProgram(false),
       endExecution(false),
-      clockCounter(0)
+      clockCounter(0),
+      time_running(0),
+      time_idle(0),
+      time_waiting_io(0)
 {
     if (printLockPtr)
         printLockFlag = *printLockPtr;
 }
 
 Core::~Core() = default;
+
+
+// ==========================================================
+//     NOVO — MÉTRICAS DO CORE POR TICK
+// ==========================================================
+void Core::updateCoreTime()
+{
+    switch (state)
+    {
+        case RUNNING:
+            time_running++;
+            break;
+        case WAITING_IO:
+            time_waiting_io++;
+            break;
+        case IDLE:
+        default:
+            time_idle++;
+            break;
+    }
+}
 
 
 // ==========================================================
@@ -74,6 +98,7 @@ CoreEvent Core::stepOneCycle() {
     ev.pcb = nullptr;
     ev.coreId = coreId;
 
+    // Core sem processo
     if (!current || !contextPtr) {
         state = IDLE;
         return ev;
@@ -82,7 +107,7 @@ CoreEvent Core::stepOneCycle() {
     ControlContext& ctx = *contextPtr;
 
     // -------------------------------------------------------
-    // GANHA SEGURANÇA NO PIPELINE
+    // GARANTIR TAMANHO DO PIPELINE
     // -------------------------------------------------------
     if (uc.data.size() <= static_cast<size_t>(ctx.counter))
         uc.data.resize(ctx.counter + 1);
@@ -134,7 +159,7 @@ CoreEvent Core::stepOneCycle() {
 
 
     // =======================================================
-    //          FINALIZAÇÃO COMPLETA DO PIPELINE
+    //      FINALIZAÇÃO COMPLETA DO PIPELINE
     // =======================================================
     if (ctx.counterForEnd <= 0) {
 
@@ -174,7 +199,7 @@ CoreEvent Core::stepOneCycle() {
         ev.type = CoreEvent::BLOCKED;
         ev.pcb = current;
 
-        // Mover os requests do pipeline para o evento
+        // Passa a requisição de IO para o evento
         ev.ioRequests = std::move(ioRequests);
 
         contextPtr.reset();
@@ -186,7 +211,8 @@ CoreEvent Core::stepOneCycle() {
 
 
     // =======================================================
-    //       CONTINUA EXECUTANDO — evento NONE
+    //        CONTINUA EXECUTANDO — evento NONE
     // =======================================================
     return ev;
 }
+

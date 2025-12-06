@@ -24,6 +24,11 @@ public:
     size_t numCores() const { return cores.size(); }
     size_t countActiveCores() const; // Conta quantos cores estão ativos
 
+    // ADICIONAR AQUI:
+    const std::vector<std::unique_ptr<Core>>& getCores() const {
+        return cores;
+    }
+
 private:
     std::vector<std::unique_ptr<Core>> cores;
     MemoryManager* memManager;

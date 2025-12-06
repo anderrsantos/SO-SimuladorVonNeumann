@@ -1,3 +1,4 @@
+// MultiCore.cpp
 #include "MultiCore.hpp"
 #include <iostream>
 
@@ -6,24 +7,24 @@ MultiCore::MultiCore(size_t n, MemoryManager* memMgr, IOManager* ioMgr, bool* pr
 {
     cores.reserve(n);
     for (size_t i = 0; i < n; ++i) {
-        cores.emplace_back(std::make_unique<Core>(static_cast<int>(i), memManager, ioMgr, printLockPtr));
+        cores.emplace_back(std::make_unique<Core>(static_cast<int>(i), memMgr, ioMgr, printLockPtr));
     }
 }
 
 MultiCore::~MultiCore() = default;
 
 void MultiCore::assignReadyProcesses(const std::function<PCB*()>& fetchNext) {
+    for (auto &cptr : cores) {
+        if (!cptr) continue;
 
-    for (auto &core : cores) {
+        if (cptr->isIdle()) {
+            PCB* p = fetchNext();
+            if (p == nullptr) continue;
 
-        // se o core está livre
-        if (core->isIdle()) {
-
-            // pega próximo processo pela política
-            PCB* next = fetchNext();
-
-            if (next != nullptr) {
-                core->assignProcess(next);
+            bool ok = cptr->assignProcess(p);
+            if (!ok) {
+                std::cerr << "[MultiCore] Warning: failed to assign PCB pid=" << p->pid
+                          << " to core " << cptr->getId() << "\n";
             }
         }
     }
@@ -31,20 +32,45 @@ void MultiCore::assignReadyProcesses(const std::function<PCB*()>& fetchNext) {
 
 std::vector<CoreEvent> MultiCore::stepAll() {
     std::vector<CoreEvent> events;
-    events.reserve(cores.size()); // evita realocações desnecessárias
+    events.reserve(cores.size());
 
     for (auto &cptr : cores) {
+        if (!cptr) continue;
+
+        // 🔥 NOVO: mede tempo deste core no tick atual
+        cptr->updateCoreTime();
+
         CoreEvent ev = cptr->stepOneCycle();
-        if (ev.type != CoreEvent::NONE) {
-            // mover o evento para o vetor (CoreEvent contém unique_ptr -> não copiável)
+
+        if (ev.coreId < 0) ev.coreId = cptr->getId();
+
+        if (ev.type == CoreEvent::BLOCKED) {
+            if (ioManager) {
+                try {
+                    ioManager->registerProcessWaitingForIO(ev.pcb, std::move(ev.ioRequests), 100);
+                } catch (const std::exception &ex) {
+                    std::cerr << "[MultiCore] Exception while registering IO: " << ex.what() << "\n";
+                } catch (...) {
+                    std::cerr << "[MultiCore] Unknown exception while registering IO\n";
+                }
+            }
+
+            ev.ioRequests.clear();
             events.push_back(std::move(ev));
+            continue;
         }
+
+        events.push_back(std::move(ev));
     }
+
     return events;
 }
 
 bool MultiCore::hasActiveCores() const {
-    for (auto &cptr : cores) if (!cptr->isIdle()) return true;
+    for (const auto &cptr : cores) {
+        if (!cptr) continue;
+        if (!cptr->isIdle()) return true;
+    }
     return false;
 }
 

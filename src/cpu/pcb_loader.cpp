@@ -60,35 +60,38 @@ bool load_pcb_from_json(const std::string &path, PCB &pcb) {
                 }
             }
 
-            // LABELS — agora convertidos para PC em bytes
+            // =====================================================
+            // LABELS — AGORA EM WORD INDEX (SEM *4)
+            // =====================================================
             if (prog.contains("labels") && prog["labels"].is_object()) {
                 for (auto it = prog["labels"].begin(); it != prog["labels"].end(); ++it) {
                     uint32_t wordIndex = it.value().get<uint32_t>();
-                    pcb.labelMap[it.key()] = wordIndex * 4;           // <-- CORREÇÃO
+                    pcb.labelMap[it.key()] = wordIndex;   // <-- CORREÇÃO FINAL
                 }
             }
 
-            // DATA SYMBOLS
+            // =====================================================
+            // DATA SYMBOLS — TAMBÉM WORD INDEX
+            // =====================================================
             if (prog.contains("data_symbols") && prog["data_symbols"].is_object()) {
                 for (auto it = prog["data_symbols"].begin(); it != prog["data_symbols"].end(); ++it) {
                     uint32_t wordIndex = it.value().get<uint32_t>();
-                    pcb.dataMap[it.key()] = wordIndex * 4;           // <-- CORREÇÃO
+                    pcb.dataMap[it.key()] = wordIndex;    // <-- CORREÇÃO FINAL
                 }
             }
         }
 
         // =====================================================
-        //   data_bytes e code_bytes = quantidade de words
-        //   (NÃO renomeei para evitar quebrar seu simulador!)
+        // data_bytes e code_bytes = quantidade de palavras
         // =====================================================
         pcb.data_bytes = static_cast<uint32_t>(pcb.dataSegment.size());
         pcb.code_bytes = static_cast<uint32_t>(pcb.codeSegment.size());
         pcb.job_length = pcb.code_bytes;
 
         // =====================================================
-        // PC INICIAL EM BYTES
+        // PC INICIAL EM WORDS (SEM *4)
         // =====================================================
-        pcb.initial_pc = pcb.data_bytes * 4;   // <-- CORREÇÃO CENTRAL
+        pcb.initial_pc = pcb.data_bytes;   // <-- AGORA CORRETO
 
         return true;
     }

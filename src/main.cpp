@@ -35,7 +35,7 @@ static vector<string> resolve_process_files(int argc, char** argv) {
 
         if (exists(p))                             files.push_back(p.string());
         else if (exists(fs::path("processes")/p))  files.push_back((fs::path("processes")/p).string());
-        else if (exists(fs::path("..")/"processes"/p)) 
+        else if (exists(fs::path("..")/"processes"/p))
                                                    files.push_back((fs::path("..")/"processes"/p).string());
         else if (p.extension() == ".json")         files.push_back(p.string());
     }
@@ -63,10 +63,11 @@ static vector<string> resolve_process_files(int argc, char** argv) {
 int main(int argc, char** argv) {
 
     ios::sync_with_stdio(false);
+    cin.tie(nullptr);
 
     // ------------------------ CONFIGURAÇÃO ------------------------
-    const size_t RAM_SIZE       = 4096;
-    const size_t SEC_SIZE       = 8192;
+    const size_t RAM_SIZE       = 4096;   // em WORDS
+    const size_t SEC_SIZE       = 8192;   // em WORDS
     const size_t CACHE_CAP      = 64;
     const uint32_t PART_SIZE    = 512;
     size_t NCORES                = 4;  // Padrão: 4 cores
@@ -155,8 +156,9 @@ int main(int argc, char** argv) {
     vector<PCB*> pending;
 
     for (PCB* p : pcbPtrs) {
+        // REQUISIÇÃO DE TAMANHO EM WORDS (cada elemento data/code já é contado em words)
         uint32_t req = p->data_bytes + p->code_bytes;
-        if (req == 0) req = 1;
+        if (req == 0) req = 1; // reservar ao menos 1 palavra
 
         Partition* part = memory.allocateFixedPartition(*p, req);
 
@@ -165,15 +167,18 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // DATA
+        // DATA (cada índice é uma word index)
         for (uint32_t i = 0; i < p->data_bytes; i++)
             memory.writeLogical(i, p->dataSegment[i], *p);
 
-        // CODE
+        // CODE (base em words = data_bytes)
+        uint32_t code_base = p->data_bytes;
         for (uint32_t i = 0; i < p->code_bytes; i++)
-            memory.writeLogical(p->data_bytes + i, p->codeSegment[i], *p);
+            memory.writeLogical(code_base + i, p->codeSegment[i], *p);
 
+        // initial_pc em WORDS (PC aponta para início do código em índice de palavra)
         p->initial_pc = p->data_bytes;
+
         scheduler.add(p);
     }
 
@@ -211,8 +216,9 @@ int main(int argc, char** argv) {
                 for (uint32_t i = 0; i < p->data_bytes; i++)
                     memory.writeLogical(i, p->dataSegment[i], *p);
 
+                uint32_t code_base = p->data_bytes;
                 for (uint32_t i = 0; i < p->code_bytes; i++)
-                    memory.writeLogical(p->data_bytes + i, p->codeSegment[i], *p);
+                    memory.writeLogical(code_base + i, p->codeSegment[i], *p);
 
                 p->initial_pc = p->data_bytes;
                 scheduler.add(p);
@@ -268,6 +274,8 @@ int main(int argc, char** argv) {
 
     // ------------------------ MÉTRICAS ------------------------
     auto reports = Metrics::collect(allPCBs);
+    auto core_reports = Metrics::collectCores(multicore.getCores());
+
 
     // Criar diretório output se não existir (no diretório de trabalho atual)
     try {
