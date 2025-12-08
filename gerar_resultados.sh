@@ -2,6 +2,9 @@
 # Script para gerar todos os resultados necessários para o relatório
 # Executa o simulador com cada política e número de cores, gerando comparações
 
+
+#A estrutura de politica é em FIFO
+
 echo "=========================================="
 echo "  GERANDO RESULTADOS DO SIMULADOR"
 echo "  Comparação de Políticas e Cores"

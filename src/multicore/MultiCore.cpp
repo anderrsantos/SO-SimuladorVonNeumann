@@ -37,7 +37,7 @@ std::vector<CoreEvent> MultiCore::stepAll() {
     for (auto &cptr : cores) {
         if (!cptr) continue;
 
-        // 🔥 NOVO: mede tempo deste core no tick atual
+        // mede tempo deste core no tick atual
         cptr->updateCoreTime();
 
         CoreEvent ev = cptr->stepOneCycle();

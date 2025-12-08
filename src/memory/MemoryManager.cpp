@@ -5,16 +5,18 @@
 // -------------------------------------------------------------
 MemoryManager::MemoryManager(size_t mainMemorySize,
                              size_t secondaryMemorySize,
-                             size_t cacheCapacity)
+                             size_t cacheCapacity,
+                             CachePolicyType cachePolicy)
 {
     mainMemory = std::make_unique<MAIN_MEMORY>(mainMemorySize);
     secondaryMemory = std::make_unique<SECONDARY_MEMORY>(secondaryMemorySize);
 
-    // Cache com capacidade configurável
-    L1_cache = std::make_unique<Cache>(cacheCapacity);
+    // Cache com FIFO ou LRU
+    L1_cache = std::make_unique<Cache>(cacheCapacity, cachePolicy);
 
     mainMemoryLimit = mainMemorySize;
 }
+
 
 // -------------------------------------------------------------
 //               CRIAÇÃO DE PARTIÇÕES FIXAS

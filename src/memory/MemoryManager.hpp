@@ -8,6 +8,7 @@
 #include "SECONDARY_MEMORY.hpp"
 #include "cache.hpp"
 #include "../cpu/PCB.hpp"
+#include "constants.hpp"
 
 // -------------------------------------------------------------
 //      Estrutura de Partições Fixas
@@ -41,8 +42,10 @@ private:
 
 public:
     MemoryManager(size_t mainMemorySize,
-                  size_t secondaryMemorySize,
-                  size_t cacheCapacity);
+              size_t secondaryMemorySize,
+              size_t cacheCapacity,
+              CachePolicyType cachePolicy = CachePolicyType::FIFO);
+
 
     // ---------- Partições Fixas ----------
     void createPartitions(uint32_t partitionSize);

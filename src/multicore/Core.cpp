@@ -68,7 +68,7 @@ bool Core::assignProcess(PCB* pcb) {
     clockCounter = 0;
 
     ioRequests.clear();
-    uc.data.clear();   // <<< EVITA lixo no pipeline !!!
+    uc.data.clear();   // <<< EVITA lixo no pipeline
 
     // Construção do ControlContext compatível com CONTROL_UNIT.hpp
     contextPtr = std::make_unique<ControlContext>(

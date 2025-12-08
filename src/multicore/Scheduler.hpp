@@ -24,7 +24,7 @@ public:
 
     void add(PCB* pcb);        // processo novo, volta de preempção, etc.
     PCB* fetchNext();          // entrega próximo PCB
-    void unblock(PCB* pcb);    // AGORA ESSENCIAL para IO Worker!
+    void unblock(PCB* pcb);    // ESSENCIAL para IO Worker
     bool empty() const;
 
     void setPolicy(SchedPolicy p) { policy = p; }

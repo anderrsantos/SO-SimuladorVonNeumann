@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     const uint32_t PART_SIZE    = 512;
     size_t NCORES                = 4;  // Padrão: 4 cores
 
+    CachePolicyType cachePolicy = CachePolicyType::FIFO;  // Cache com FIFO ou LRU
     SchedPolicy policy = SchedPolicy::FCFS;
 
     // Detectar argumentos: política e número de cores
@@ -89,7 +90,6 @@ int main(int argc, char** argv) {
         }
     }
     
-    // Segundo argumento pode ser número de cores
     if (argc >= 3) {
         try {
             size_t cores = stoul(argv[2]);
@@ -113,7 +113,9 @@ int main(int argc, char** argv) {
     for (auto &f : files) cout << "   " << f << "\n";
 
     // ------------------------ COMPONENTES ------------------------
-    MemoryManager memory(RAM_SIZE, SEC_SIZE, CACHE_CAP);
+
+    MemoryManager memory(RAM_SIZE, SEC_SIZE, CACHE_CAP,cachePolicy);
+
     memory.createPartitions(PART_SIZE);
 
     IOManager ioManager;
@@ -303,8 +305,8 @@ int main(int argc, char** argv) {
 
     // Salvar métricas básicas (com nome da política)
     Metrics::printConsole(reports);
-    Metrics::saveCSV(reports, policyDir + "/metrics.csv");
-    Metrics::saveJSON(reports, policyDir + "/metrics.json");
+    //Metrics::saveCSV(reports, policyDir + "/metrics.csv");
+    //Metrics::saveJSON(reports, policyDir + "/metrics.json");
 
     // Calcular e salvar métricas agregadas por política
     auto policyMetrics = MetricsExtended::calculatePolicyMetrics(
@@ -318,7 +320,8 @@ int main(int argc, char** argv) {
     temporalCollector.saveCSV(policyDir + "/temporal_metrics.csv");
     
     // Também salvar no diretório raiz para compatibilidade (última execução)
-    Metrics::saveCSV(reports, "output/metrics.csv");
+    Metrics::saveCoreCSV(core_reports, "output/core_metrics.csv");
+    
     MetricsExtended::savePolicyMetricsCSV(policyVec, "output/policy_metrics.csv");
 
     // Comparação Single-Core vs Multicore
