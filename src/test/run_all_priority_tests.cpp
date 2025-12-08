@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 int main() {
     std::cout << "╔════════════════════════════════════════════════════╗\n";
