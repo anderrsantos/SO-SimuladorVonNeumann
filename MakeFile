@@ -1,0 +1,153 @@
+# =====================================================
+# CONFIGURAÇÕES DO PROJETO
+# =====================================================
+
+CXX       := g++
+CXXFLAGS  := -std=c++17 -Wall -Wextra -pthread -O2
+SRC_DIR   := src
+BUILD_DIR := build
+
+# =====================================================
+# LISTA DE ARQUIVOS DO SIMULADOR
+# =====================================================
+
+SIM_SOURCES = \
+    $(SRC_DIR)/main.cpp \
+    $(SRC_DIR)/cpu/CONTROL_UNIT.cpp \
+    $(SRC_DIR)/cpu/pcb_loader.cpp \
+    $(SRC_DIR)/cpu/REGISTER_BANK.cpp \
+    $(SRC_DIR)/cpu/ULA.cpp \
+    $(SRC_DIR)/IO/IOManager.cpp \
+    $(SRC_DIR)/memory/cache.cpp \
+    $(SRC_DIR)/memory/cachePolicy.cpp \
+    $(SRC_DIR)/memory/MAIN_MEMORY.cpp \
+    $(SRC_DIR)/memory/MemoryManager.cpp \
+    $(SRC_DIR)/memory/SECONDARY_MEMORY.cpp \
+    $(SRC_DIR)/multicore/Core.cpp \
+    $(SRC_DIR)/multicore/MultiCore.cpp \
+    $(SRC_DIR)/multicore/Scheduler.cpp \
+    $(SRC_DIR)/parser_json/parser_json.cpp
+
+SIM_OBJS = $(SIM_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+
+# =====================================================
+# COMPILAÇÃO PADRÃO
+# =====================================================
+
+all: simulador
+
+$(BUILD_DIR)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+simulador: $(SIM_OBJS)
+	$(CXX) $(CXXFLAGS) $^ -o simulador
+
+# =====================================================
+# EXECUTAR O SIMULADOR
+# =====================================================
+
+run: simulador
+	./simulador
+
+# =====================================================
+# DEFINIÇÃO DOS TESTES
+# =====================================================
+
+TESTS = \
+	test_scheduler_priority \
+	test_memory_critical \
+	test_pipeline_basic \
+	test_integration_complete \
+	test_edge_cases \
+	test_performance \
+	test_stress \
+	test_io_detailed \
+	test_metrics
+
+# Fontes de teste → objetos
+$(BUILD_DIR)/test_%.o: $(SRC_DIR)/test/test_%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Regra genérica para linkar cada teste
+define BUILD_TEST =
+$(1): $(BUILD_DIR)/$(1).o $(SIM_OBJS)
+	$(CXX) $(CXXFLAGS) $$^ -o $(1)
+endef
+
+$(foreach t,$(TESTS),$(eval $(call BUILD_TEST,$(t))))
+
+# =====================================================
+# ATALHOS EM PORTUGUÊS PARA EXECUTAR AUTOMATICAMENTE
+# =====================================================
+
+teste_escalonador: test_scheduler_priority
+	./test_scheduler_priority
+
+teste_memoria: test_memory_critical
+	./test_memory_critical
+
+teste_pipeline: test_pipeline_basic
+	./test_pipeline_basic
+
+teste_integracao: test_integration_complete
+	./test_integration_complete
+
+teste_borda: test_edge_cases
+	./test_edge_cases
+
+teste_performance: test_performance
+	./test_performance
+
+teste_stress: test_stress
+	./test_stress
+
+teste_io: test_io_detailed
+	./test_io_detailed
+
+teste_metricas: test_metrics
+	./test_metrics
+
+# =====================================================
+# EXECUTAR TODOS OS TESTES
+# =====================================================
+
+test-all: $(TESTS)
+	@echo "=== Executando TODOS os testes ==="
+	@for t in $(TESTS); do \
+		echo "> Rodando $$t"; \
+		./$$t || true; \
+		echo ""; \
+	done
+
+# =====================================================
+# LIMPEZA
+# =====================================================
+
+clean:
+	rm -rf $(BUILD_DIR)
+	rm -f simulador $(TESTS)
+
+# =====================================================
+# AJUDA
+# =====================================================
+
+help:
+	@echo "Comandos disponíveis:"
+	@echo "  make                → compila o simulador"
+	@echo "  make run            → executa o simulador"
+	@echo "  make clean          → remove build e executáveis"
+	@echo ""
+	@echo "Testes individuais:"
+	@echo "  make teste_pipeline        → compila + executa pipeline"
+	@echo "  make teste_memoria         → compila + executa memória"
+	@echo "  make teste_escalonador     → compila + executa escalonamento"
+	@echo "  make teste_integracao      → compila + executa integração"
+	@echo "  make teste_borda           → compila + executa edge cases"
+	@echo "  make teste_stress          → compila + executa stress test"
+	@echo "  make teste_performance     → compila + executa performance"
+	@echo "  make teste_io              → compila + executa IO detalhado"
+	@echo "  make teste_metricas        → compila + executa coleta de métricas"
+	@echo ""
+	@echo "  make test-all       → compila + executa todos os testes"
